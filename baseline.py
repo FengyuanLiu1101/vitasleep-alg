@@ -13,26 +13,55 @@ from typing import Any
 
 # 冷启动内置人群统计（示例常量，可由运营/医学团队校准后替换）
 POPULATION_MEAN: dict[str, float] = {
-    "resting_hr": 62.0,
-    "hrv_rmssd": 42.0,
-    "spo2": 97.0,
-    "deep_sleep_ratio": 0.22,
-    "active_minutes": 38.0,
+    # 心率 / HRV
+    "resting_hr":          62.0,
+    "hrv_rmssd":           42.0,
+    "hrv_sdnn":            55.0,
+    # 血压
+    "systolic":           118.0,
+    "diastolic":           76.0,
+    # 血氧
+    "spo2":                97.0,
+    # 睡眠分期（分钟）：总睡眠约 7.5h，效率约 87%
+    "deep_sleep_minutes":  90.0,
+    "light_sleep_minutes": 200.0,
+    "rem_sleep_minutes":   100.0,
+    "awake_minutes":        25.0,
+    # 活动
+    "steps":             8000.0,
+    "active_calories":    350.0,
+    "active_minutes":      38.0,
 }
 
 POPULATION_STD: dict[str, float] = {
-    "resting_hr": 8.0,
-    "hrv_rmssd": 14.0,
-    "spo2": 1.2,
-    "deep_sleep_ratio": 0.06,
-    "active_minutes": 18.0,
+    "resting_hr":           8.0,
+    "hrv_rmssd":           14.0,
+    "hrv_sdnn":            18.0,
+    "systolic":            10.0,
+    "diastolic":            8.0,
+    "spo2":                 1.2,
+    "deep_sleep_minutes":  30.0,
+    "light_sleep_minutes": 50.0,
+    "rem_sleep_minutes":   30.0,
+    "awake_minutes":       15.0,
+    "steps":             3000.0,
+    "active_calories":    120.0,
+    "active_minutes":      18.0,
 }
 
 METRIC_KEYS: tuple[str, ...] = (
     "resting_hr",
     "hrv_rmssd",
+    "hrv_sdnn",
+    "systolic",
+    "diastolic",
     "spo2",
-    "deep_sleep_ratio",
+    "deep_sleep_minutes",
+    "light_sleep_minutes",
+    "rem_sleep_minutes",
+    "awake_minutes",
+    "steps",
+    "active_calories",
     "active_minutes",
 )
 
