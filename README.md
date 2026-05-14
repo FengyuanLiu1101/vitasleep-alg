@@ -1,104 +1,119 @@
 # Vitasleep Algorithm Service
 
-基于生理指标的「机体电量」评分算法服务，使用 FastAPI 提供 REST 接口。
+基于 Google Health Connect 生理指标的算法评分服务，使用 FastAPI 提供 REST 接口。
+覆盖机体电量（AL-04）、睡眠分期质量（AL-05）、心血管健康指数（AL-06）、用户基线建模（AL-07）、实时疲劳评估（AL-08）。
 
-## 功能概述
+## 算法模块
 
-根据用户的五项生理指标与个人基线，计算 0~100 分的**机体电量（Battery Score）**，并随距上次睡眠的时间做指数衰减。
-
-**评分组成：**
-
-| 维度 | 指标 | 默认权重 |
-|------|------|----------|
-| 睡眠质量 | `deep_sleep_ratio` | 40% |
-| 心率/HRV | `resting_hr` + `hrv_rmssd` | 30% |
-| 血氧 | `spo2` | 15% |
-| 活动量 | `active_minutes` | 15% |
-
-- 所有指标均允许缺失（`null`），缺失时用个人基线均值兜底，并相应降低置信度
-- `hours_since_last_sleep` 可选，缺省时以 8.0 小时兜底，置信度额外扣 0.1
-- 基线采用「个人滚动窗口 + 群体兜底」混合策略，冷启动也可正常使用
+| 模块 | 端点 | 算法核心 |
+|------|------|---------|
+| AL-04 机体电量 | `POST /calculate/battery` | 四组分加权融合 + 时间指数衰减 |
+| AL-05 睡眠质量 | `POST /calculate/sleep` | 时长30% + 效率30% + 深睡比25% + REM比15% |
+| AL-06 心血管健康 | `POST /calculate/cardio` | HRV复合40% + 血压(MAP+脉压差)35% + 心率25% |
+| AL-07 用户基线 | `POST /baseline/update` | 7天滚动窗口 + 人群冷启动兜底 |
+| AL-08 疲劳评估 | `POST /calculate/fatigue` | HRV抑制35% + 睡眠不足30% + 时间压力20% + 电量亏空15% |
 
 ## 项目结构
 
 ```
 .
 ├── main.py          # FastAPI 入口，路由与请求/响应模型
-├── battery.py       # 电量计算核心逻辑
-├── baseline.py      # 混合基线模型（个人 + 群体）
-├── normalizer.py    # 指标归一化
-├── optimizer.py     # 参数校准工具
+├── battery.py       # AL-04 机体电量计算
+├── sleep_scorer.py  # AL-05 睡眠分期质量评分
+├── cardio.py        # AL-06 心血管健康指数
+├── fatigue.py       # AL-08 实时疲劳评估
+├── baseline.py      # AL-07 混合基线模型（个人 + 人群）
+├── normalizer.py    # 指标 z-score 归一化工具
+├── optimizer.py     # 权重白盒优化（SLSQP）
 ├── params.py        # 可调参数定义与默认值
-├── mock_data.py     # 模拟用户数据（演示/测试用）
+├── mock_data.py     # 模拟场景数据（演示/测试用）
 └── requirements.txt
 ```
 
 ## 快速开始
 
-**安装依赖：**
-
 ```bash
 pip install -r requirements.txt
-```
-
-**启动服务：**
-
-```bash
 uvicorn main:app --reload --port 8001
 ```
 
 启动后访问 http://localhost:8001/docs 查看交互式 API 文档。
 
-## API 接口
+## 输入字段（Health Connect 对齐）
 
-### `POST /calculate/battery` — 计算机体电量
+所有计算接口共用同一 `MetricPayload`，**全部字段均可为 `null`**：
 
+| 字段 | Health Connect 来源 | 单位 |
+|------|-------------------|------|
+| `resting_hr` | `HeartRate` | bpm |
+| `hrv_rmssd` | `HeartRateVariabilityRmssd` | ms |
+| `hrv_sdnn` | `HeartRateVariabilitySdnn` | ms |
+| `systolic` / `diastolic` | `BloodPressure` | mmHg |
+| `spo2` | `OxygenSaturation` | % |
+| `deep/light/rem/awake_sleep_minutes` | `SleepStage` | 分钟 |
+| `steps` | `Steps` | 步 |
+| `active_calories` | `ActiveCaloriesBurned` | kcal |
+| `active_minutes` | `ExerciseSession` | 分钟 |
+
+## API 示例
+
+### 机体电量
 ```json
+POST /calculate/battery
 {
-  "user_id": "user_001",
-  "hours_since_last_sleep": 6.5,
+  "user_id": "uid_001",
+  "hours_since_last_sleep": 8.0,
   "metrics": {
-    "resting_hr": 58.0,
-    "hrv_rmssd": 42.0,
-    "spo2": 97.5,
-    "deep_sleep_ratio": 0.22,
-    "active_minutes": 35.0
+    "resting_hr": 62, "hrv_rmssd": 45, "hrv_sdnn": 58,
+    "systolic": 118, "diastolic": 76, "spo2": 97,
+    "deep_sleep_minutes": 90, "light_sleep_minutes": 200,
+    "rem_sleep_minutes": 100, "awake_minutes": 25,
+    "steps": 8000, "active_calories": 350, "active_minutes": 40
   }
 }
 ```
 
-响应包含 `battery`（衰减后电量）、`raw_battery`（衰减前）、`confidence`（置信度 0~1）、各组分得分等明细。
-
-### `POST /baseline/update` — 写入历史数据更新基线
-
+### 睡眠质量
 ```json
+POST /calculate/sleep
 {
-  "user_id": "user_001",
-  "records": [
-    { "resting_hr": 60, "hrv_rmssd": 40, "spo2": 97, "deep_sleep_ratio": 0.2, "active_minutes": 30 }
-  ]
+  "user_id": "uid_001",
+  "metrics": {
+    "deep_sleep_minutes": 90, "light_sleep_minutes": 200,
+    "rem_sleep_minutes": 100, "awake_minutes": 25
+  }
 }
 ```
 
-### `GET /baseline/{user_id}` — 查询当前基线
-
-### `POST /params/update` — 运行时调整权重与衰减参数
-
+### 心血管健康指数
 ```json
+POST /calculate/cardio
 {
-  "weights": { "sleep": { "value": 0.45 } },
-  "decay_rate": 0.025
+  "user_id": "uid_001",
+  "metrics": {
+    "resting_hr": 62, "hrv_rmssd": 45, "hrv_sdnn": 58,
+    "systolic": 118, "diastolic": 76
+  }
 }
 ```
 
-权重自动归一化，无需重启服务生效。
-
-### `GET /params` — 查询当前参数与合法区间
+### 疲劳评估
+```json
+POST /calculate/fatigue
+{
+  "user_id": "uid_001",
+  "hours_since_last_sleep": 10.0,
+  "metrics": { ... }
+}
+```
+返回 `fatigue_index`（0~100）和 `level`（low / moderate / high / severe）。
 
 ## 可调参数
 
+通过 `POST /params/update` 运行时调整，无需重启：
+
 | 参数 | 默认值 | 合法区间 |
-|------|--------|----------|
+|------|--------|---------|
 | `weights.sleep` | 0.40 | [0.25, 0.55] |
 | `weights.hrv` | 0.30 | [0.15, 0.45] |
 | `weights.spo2` | 0.15 | [0.05, 0.25] |
